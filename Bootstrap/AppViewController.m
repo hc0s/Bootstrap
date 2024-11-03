@@ -2,7 +2,7 @@
 
 #import "AppViewController.h"
 #include "AppDelegate.h"
-#import "AppList.h"
+#import "AppInfo.h"
 #include "common.h"
 #include "AppDelegate.h"
 #include <sys/stat.h>
@@ -54,7 +54,7 @@
         isFiltered = true;
         filteredApps = [[NSMutableArray alloc] init];
         searchText = searchText.lowercaseString;
-        for (AppList* app in appsArray) {
+        for (AppInfo* app in appsArray) {
             NSRange nameRange = [app.name.lowercaseString rangeOfString:searchText options:NSCaseInsensitiveSearch];
             NSRange bundleIdRange = [app.bundleIdentifier.lowercaseString rangeOfString:searchText options:NSCaseInsensitiveSearch];
             if(nameRange.location != NSNotFound || bundleIdRange.location != NSNotFound) {
@@ -76,7 +76,7 @@
     self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleInsetGrouped];
     self.tableView.tableFooterView = [[UIView alloc] init];
     
-    [self setTitle:Localized(@"Tweak Enabler")];
+    [self setTitle:Localized(@"Enable Tweak for App")];
     
     isFiltered = false;
     
@@ -127,6 +127,28 @@
     [self.tableView.refreshControl endRefreshing];
 }
 
+-(BOOL)tweakEnabled:(AppInfo*)app {
+    struct stat st;
+    if(lstat([app.bundleURL.path stringByAppendingPathComponent:@".jbroot"].fileSystemRepresentation, &st)==0) {
+        return YES;
+    }
+    
+    if(!isDefaultInstallationPath(app.bundleURL.path)) {
+        return NO;
+    }
+    
+    NSString* uuidPath = [app.bundleURL.path stringByDeletingLastPathComponent];
+    NSString* backupFlag = [uuidPath stringByAppendingPathComponent:@".appbackup"];
+    NSString* backupPath = [[uuidPath stringByAppendingPathComponent:app.bundleURL.path.lastPathComponent] stringByAppendingPathExtension:@"appbackup"];
+    SYSLOG("uuidPath=%@, backupFlag=%@, backupPath=%@", uuidPath, backupFlag, backupPath);
+    if([NSFileManager.defaultManager fileExistsAtPath:backupFlag] && [NSFileManager.defaultManager fileExistsAtPath:backupPath]) {
+        //if the app has been successfully backed up but failed to enable tweak injection for some reason, or the app bundle is overwritten, we will still show that tweak injection has been enabled so that the user will have the chance to restore the app in appenabler
+        return YES;
+    }
+    
+    return NO;
+}
+
 - (void)updateData:(BOOL)sort {
     NSMutableArray* applications = [NSMutableArray new];
     PrivateApi_LSApplicationWorkspace* _workspace = [NSClassFromString(@"LSApplicationWorkspace") new];
@@ -134,7 +156,7 @@
 
     for(id proxy in allInstalledApplications)
     {
-        AppList* app = [AppList appWithPrivateProxy:proxy];
+        AppInfo* app = [AppInfo appWithPrivateProxy:proxy];
     
 //        if(app.isHiddenApp) continue;
                 
@@ -155,10 +177,18 @@
             [app.bundleURL.path stringByAppendingString:@"/.TrollStorePresistenceHelper"]])
                 continue;
         
+        if([NSFileManager.defaultManager fileExistsAtPath:
+            [app.bundleURL.path stringByAppendingString:@"/.Bootstrap"]])
+                continue;
+        
         if([app.bundleURL.path.lastPathComponent isEqualToString:@"TrollStore.app"])
             continue;
         
         if([app.bundleURL.path.lastPathComponent isEqualToString:@"Bootstrap.app"])
+            continue;
+        
+        if([app.bundleIdentifier isEqualToString:NSBundle.mainBundle.bundleIdentifier]
+           || [app.bundleIdentifier isEqualToString:@"com.roothide.Bootstrap"])
             continue;
             
         [applications addObject:app];
@@ -166,16 +196,17 @@
     
     if(sort)
     {
-        NSArray *appsSortedByName = [applications sortedArrayUsingComparator:^NSComparisonResult(AppList *app1, AppList *app2) {
-            struct stat st;
-            BOOL enabled1 = lstat([app1.bundleURL.path stringByAppendingPathComponent:@".jbroot"].fileSystemRepresentation, &st)==0;
-            BOOL enabled2 = lstat([app2.bundleURL.path stringByAppendingPathComponent:@".jbroot"].fileSystemRepresentation, &st)==0;
-            if(enabled1 || enabled2) {
+        NSArray *appsSortedByName = [applications sortedArrayUsingComparator:^NSComparisonResult(AppInfo *app1, AppInfo *app2) {
+
+            BOOL enabled1 = [self tweakEnabled:app1];
+            BOOL enabled2 = [self tweakEnabled:app2];
+            
+            if((enabled1&&!enabled2) || (!enabled1&&enabled2)) {
                 return [@(enabled2) compare:@(enabled1)];
             }
             
             if(app1.isHiddenApp || app2.isHiddenApp) {
-                return [@(app1.isHiddenApp) compare:@(app2.isHiddenApp)];
+                return (enabled1&&enabled2) ? [@(app2.isHiddenApp) compare:@(app1.isHiddenApp)] : [@(app1.isHiddenApp) compare:@(app2.isHiddenApp)];
             }
             
             return [app1.name localizedStandardCompare:app2.name];
@@ -186,9 +217,9 @@
     else
     {
         NSMutableArray *newapps = [NSMutableArray array];
-        [applications enumerateObjectsUsingBlock:^(AppList *newobj, NSUInteger idx, BOOL * _Nonnull stop) {
+        [applications enumerateObjectsUsingBlock:^(AppInfo *newobj, NSUInteger idx, BOOL * _Nonnull stop) {
             __block BOOL hasBeenContained = NO;
-            [self->appsArray enumerateObjectsUsingBlock:^(AppList *obj, NSUInteger idx, BOOL * _Nonnull stop) {
+            [self->appsArray enumerateObjectsUsingBlock:^(AppInfo *obj, NSUInteger idx, BOOL * _Nonnull stop) {
                 if ([obj.bundleIdentifier isEqualToString:newobj.bundleIdentifier]) {
                     hasBeenContained = YES;
                     *stop = YES;
@@ -200,8 +231,8 @@
         }];
         
         NSMutableArray *tmpArray = [NSMutableArray array];
-        [self->appsArray enumerateObjectsUsingBlock:^(AppList *obj, NSUInteger idx, BOOL * _Nonnull stop) {
-            [applications enumerateObjectsUsingBlock:^(AppList *newobj, NSUInteger idx, BOOL * _Nonnull stop) {
+        [self->appsArray enumerateObjectsUsingBlock:^(AppInfo *obj, NSUInteger idx, BOOL * _Nonnull stop) {
+            [applications enumerateObjectsUsingBlock:^(AppInfo *newobj, NSUInteger idx, BOOL * _Nonnull stop) {
                 if ([obj.bundleIdentifier isEqualToString:newobj.bundleIdentifier]) {
                     [tmpArray addObject:newobj];
                     *stop = YES;
@@ -260,7 +291,7 @@ NSArray* unsupportedBundleIDs = @[
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"Cell"];
     
-    AppList* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
+    AppInfo* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
     
     if(!app.isHiddenApp) {
         UIImage *image = app.icon;
@@ -277,9 +308,7 @@ NSArray* unsupportedBundleIDs = @[
     if([unsupportedBundleIDs containsObject:app.bundleIdentifier])
         theSwitch.enabled = NO;
     
-    struct stat st;
-    BOOL enabled = lstat([app.bundleURL.path stringByAppendingPathComponent:@".jbroot"].fileSystemRepresentation, &st)==0;
-    [theSwitch setOn:enabled];
+    [theSwitch setOn:[self tweakEnabled:app]];
     [theSwitch addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     
     cell.accessoryView = theSwitch;
@@ -299,7 +328,7 @@ NSArray* unsupportedBundleIDs = @[
     CGPoint pos = [switchInCell convertPoint:switchInCell.bounds.origin toView:self.tableView];
     NSIndexPath *indexPath = [self.tableView indexPathForRowAtPoint:pos];
     BOOL enabled = switchInCell.on;
-    AppList* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
+    AppInfo* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
 
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
         [AppDelegate showHudMsg:Localized(@"Applying")];
@@ -316,7 +345,7 @@ NSArray* unsupportedBundleIDs = @[
         }
         
         if(status != 0) {
-            [AppDelegate showMesage:[NSString stringWithFormat:@"%@\n\nstderr:\n%@",log,err] title:[NSString stringWithFormat:@"code(%d)",status]];
+            [AppDelegate showMesage:[NSString stringWithFormat:@"%@\nstderr:\n%@",log,err] title:[NSString stringWithFormat:@"error(%d)",status]];
         }
         
         killAllForApp(app.bundleURL.path.UTF8String);
@@ -336,7 +365,7 @@ NSArray* unsupportedBundleIDs = @[
         long tag = recognizer.view.tag;
         NSIndexPath* indexPath = [NSIndexPath indexPathForRow:tag&0xFFFFFFFF inSection:tag>>32];
         
-        AppList* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
+        AppInfo* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
 
         dispatch_async(dispatch_get_global_queue(0, 0), ^{
             PrivateApi_LSApplicationWorkspace* _workspace = [NSClassFromString(@"LSApplicationWorkspace") new];
