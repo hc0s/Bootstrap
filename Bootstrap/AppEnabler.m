@@ -206,11 +206,16 @@ int enableForApp(NSString* bundlePath)
         NSString* err=nil;
         if(spawnBootstrap((char*[]){"/usr/bin/uicache","-p", bundlePath.UTF8String, NULL}, &log, &err) != 0) {
             STRAPLOG("%@\nERR:%@", log, err);
+            AppInfo* app = [AppInfo appWithBundleIdentifier:appInfo[@"CFBundleIdentifier"]];
+            if(app && [app.bundleURL.path hasPrefix:@"/Applications/"]) {
+                ASSERT([fm removeItemAtPath:bundlePath error:nil]);
+            }
             ABORT();
         }
     }
     else if([appInfo[@"CFBundleIdentifier"] hasPrefix:@"com.apple."]
-            || [NSFileManager.defaultManager fileExistsAtPath:[bundlePath stringByAppendingString:@"/../_TrollStore"]])
+            || [NSFileManager.defaultManager fileExistsAtPath:[bundlePath stringByAppendingString:@"/../_TrollStore"]]
+            || [NSFileManager.defaultManager fileExistsAtPath:[bundlePath stringByAppendingString:@"/../_TrollStoreLite"]])
     {
         ASSERT(backupApp(bundlePath) == 0);
 
@@ -257,7 +262,8 @@ int disableForApp(NSString* bundlePath)
         ASSERT(spawnBootstrap((char*[]){"/usr/bin/uicache","-p", rootfsPrefix(sysPath).UTF8String, NULL}, nil, nil) == 0);
     }
     else if([appInfo[@"CFBundleIdentifier"] hasPrefix:@"com.apple."]
-            || [NSFileManager.defaultManager fileExistsAtPath:[bundlePath stringByAppendingString:@"/../_TrollStore"]])
+            || [NSFileManager.defaultManager fileExistsAtPath:[bundlePath stringByAppendingString:@"/../_TrollStore"]]
+            || [NSFileManager.defaultManager fileExistsAtPath:[bundlePath stringByAppendingString:@"/../_TrollStoreLite"]])
     {
         
         struct stat st;

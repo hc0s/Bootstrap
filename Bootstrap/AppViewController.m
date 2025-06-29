@@ -7,16 +7,6 @@
 #include "AppDelegate.h"
 #include <sys/stat.h>
 
-@interface PrivateApi_LSApplicationWorkspace
-- (NSArray*)allInstalledApplications;
-- (BOOL)openApplicationWithBundleID:(id)arg1;
-- (NSArray*)privateURLSchemes;
-- (NSArray*)publicURLSchemes;
-- (BOOL)_LSPrivateRebuildApplicationDatabasesForSystemApps:(BOOL)arg1
-                                                  internal:(BOOL)arg2
-                                                      user:(BOOL)arg3;
-@end
-
 @interface AppViewController () {
     UISearchController *searchController;
     NSArray *appsArray;
@@ -90,35 +80,33 @@
     
     UIRefreshControl *refreshControl = [[UIRefreshControl alloc] init];
     refreshControl.tintColor = [UIColor grayColor];
-    [refreshControl addTarget:self action:@selector(startRefresh) forControlEvents:UIControlEventValueChanged];
+    [refreshControl addTarget:self action:@selector(manualRefresh) forControlEvents:UIControlEventValueChanged];
     self.tableView.refreshControl = refreshControl;
     
     [self updateData:YES];
     
     [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(startRefresh2)
+                                             selector:@selector(autoRefresh)
                                           name:UIApplicationWillEnterForegroundNotification
                                                object:nil];
 }
 
-- (void)startRefresh {
+- (void)startRefresh:(BOOL)resort {
     [self.tableView.refreshControl beginRefreshing];
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        [self updateData:YES];
+        [self updateData:resort];
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.tableView.refreshControl endRefreshing];
         });
     });
 }
 
-- (void)startRefresh2 {
-    [self.tableView.refreshControl beginRefreshing];
-    dispatch_async(dispatch_get_global_queue(0, 0), ^{
-        [self updateData:NO];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self.tableView.refreshControl endRefreshing];
-        });
-    });
+- (void)manualRefresh {
+    [self startRefresh:YES];
+}
+
+- (void)autoRefresh {
+    [self startRefresh:NO];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -151,8 +139,7 @@
 
 - (void)updateData:(BOOL)sort {
     NSMutableArray* applications = [NSMutableArray new];
-    PrivateApi_LSApplicationWorkspace* _workspace = [NSClassFromString(@"LSApplicationWorkspace") new];
-    NSArray* allInstalledApplications = [_workspace allInstalledApplications];
+    NSArray* allInstalledApplications = [LSApplicationWorkspace.defaultWorkspace allInstalledApplications];
 
     for(id proxy in allInstalledApplications)
     {
@@ -333,7 +320,7 @@ NSArray* unsupportedBundleIDs = @[
     dispatch_async(dispatch_get_global_queue(0, 0), ^{
         [AppDelegate showHudMsg:Localized(@"Applying")];
         
-        killAllForApp(app.bundleURL.path.UTF8String);
+        killAllForBundle(app.bundleURL.path.UTF8String);
         
         int status;
         NSString* log=nil;
@@ -348,7 +335,7 @@ NSArray* unsupportedBundleIDs = @[
             [AppDelegate showMesage:[NSString stringWithFormat:@"%@\nstderr:\n%@",log,err] title:[NSString stringWithFormat:@"error(%d)",status]];
         }
         
-        killAllForApp(app.bundleURL.path.UTF8String);
+        killAllForBundle(app.bundleURL.path.UTF8String);
         
         //refresh app cache list
         [self updateData:NO];
@@ -368,8 +355,7 @@ NSArray* unsupportedBundleIDs = @[
         AppInfo* app = isFiltered? filteredApps[indexPath.row] : appsArray[indexPath.row];
 
         dispatch_async(dispatch_get_global_queue(0, 0), ^{
-            PrivateApi_LSApplicationWorkspace* _workspace = [NSClassFromString(@"LSApplicationWorkspace") new];
-            [_workspace openApplicationWithBundleID:app.bundleIdentifier];
+            [LSApplicationWorkspace.defaultWorkspace openApplicationWithBundleID:app.bundleIdentifier];
         });
     }
 }
